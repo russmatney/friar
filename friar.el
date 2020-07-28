@@ -40,9 +40,9 @@
 
 (defvar friar-header
   (concat ";; The friar welcomes you."
-	  "\n\n"
-	  friar-awesome-logo
-	  "\n\n")
+          "\n\n"
+          friar-awesome-logo
+          "\n\n")
   "Message displayed on REPL-start.")
 
 (defvar friar-prompt "> ")
@@ -54,7 +54,8 @@
 
 (defvar friar-fennelview
   (with-temp-buffer
-    (insert-file-contents-literally (expand-file-name "./fennelview.lua" friar-directory))
+    (insert-file-contents-literally
+     (expand-file-name "./fennelview.lua" friar-directory))
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun friar-awesome-eval (lua-chunk)
@@ -66,14 +67,19 @@
    "Eval"
    lua-chunk))
 
+(defvar awesome-buffer-name "*awesome-friar*")
+
+(defun awesome-process-buffer nil
+  (get-buffer awesome-buffer-name))
+
 (defun friar-process nil
-  (get-buffer-process (current-buffer)))
+  (get-buffer-process (awesome-process-buffer)))
 
 (defun friar-pm nil
-  (process-mark (get-buffer-process (current-buffer))))
+  (process-mark (get-buffer-process (awesome-process-buffer))))
 
 (defun friar-set-pm (pos)
-  (set-marker (process-mark (get-buffer-process (current-buffer))) pos))
+  (set-marker (process-mark (get-buffer-process (awesome-process-buffer))) pos))
 
 (defun friar-is-whitespace-or-comment (string)
   "Return non-nil if STRING is all whitespace or a comment."
@@ -84,6 +90,17 @@
   (setq friar-input input)
   (friar-send-input))
 
+(defun friar-eval-region (start end &optional for-effect)
+  "Eval Fennel region at prompt."
+  (interactive "r\nP")
+  (friar-eval-input
+   (buffer-substring-no-properties start end)
+   for-effect))
+
+(defun friar-eval-last-sexp (&optional for-effect)
+  (interactive "P")
+  (friar-eval-region (save-excursion (backward-sexp) (point)) (point) for-effect))
+
 (defun friar-send-input (&optional for-effect)
   "Eval Fennel expression at prompt."
   (interactive)
@@ -91,43 +108,45 @@
 
 (defun friar-format-command (str)
   "Generate a shell command for invoking Fennel and compiling given string."
-  (format "printf '%s' | %s --compile /dev/stdin" str friar-fennel-file-path))
+  (format "printf '%s' | %s --globals awful,root,fennelview --compile /dev/stdin" str friar-fennel-file-path))
 
 (defun friar-compile-input (str)
   "Compile given string to Lua using Fennel."
   (let* ((command (friar-format-command str)))
-    (with-temp-buffer 
+    (with-temp-buffer
       (shell-command command (current-buffer) "*friar-stderr*")
       (let* ((output (buffer-substring-no-properties (point-min) (point-max)))
-	     (err (with-current-buffer "*friar-stderr*" (buffer-substring-no-properties (point-min) (point-max)))))
-	(with-current-buffer "*friar-stderr*" (erase-buffer))
-	(if (string= "" err)
-	  `((:is-error nil) (:result ,output))
-	  `((:is-error t) (:result ,err)))))))
+             (err (with-current-buffer "*friar-stderr*" (buffer-substring-no-properties (point-min) (point-max)))))
+        (with-current-buffer "*friar-stderr*" (erase-buffer))
+        (if (string= "" err)
+            `((:is-error nil) (:result ,output))
+          `((:is-error t) (:result ,err)))))))
 
 (defun friar-eval-input (input-string &optional for-effect)
   "Evaluate the Fennel expression INPUT-STRING, and pretty-print the result."
   ;; This function compiles the input with Fennel and chucks it over to
   ;; Awesome over D-Bus.
   (let ((string input-string)
-	(output "")
-	(pmark (friar-pm)))
+        (output "")
+        (pmark (friar-pm)))
     (unless (friar-is-whitespace-or-comment string)
       (let* ((wrapped-expression (format "(fennelview %s)" input-string))
-	     (compilation (friar-compile-input input-string))
-	     (compile-output (car (alist-get :result compilation)))
-	     (was-compilation-error (car (alist-get :is-error compilation))))
-	(setq res (format "%s\n%s" "[Compilation error]:" compile-output))
-	(unless was-compilation-error
-	  (let* ((expr (car (alist-get :result (friar-compile-input wrapped-expression))))
-		 (chunk (format "%s\n%s" friar-fennelview expr)))
-	    (setq res (friar-awesome-eval chunk))))
-	(goto-char pmark)
-	(when (or (not for-effect) (not (equal res "")))
-	  (setq output (format "%s\n" res)))
-	(setq output (format "%s\n%s" output friar-prompt))
-	(comint-output-filter (friar-process) output)
-	(friar-set-pm (point-max))))))
+             (compilation (friar-compile-input input-string))
+             (compile-output (car (alist-get :result compilation)))
+             (was-compilation-error (car (alist-get :is-error compilation))))
+        (setq res (format "%s\n%s" "[Compilation error]:" compile-output))
+        (unless was-compilation-error
+          (let* ((expr (car (alist-get
+                             :result (friar-compile-input wrapped-expression))))
+                 (chunk (format "%s\n%s" friar-fennelview expr)))
+            (setq res (friar-awesome-eval chunk))))
+        ;; TODO only when in repl buffer?
+        ;; (goto-char pmark)
+        (when (or (not for-effect) (not (equal res "")))
+          (setq output (format "%s\n" res)))
+        (setq output (format "%s\n%s" output friar-prompt))
+        (comint-output-filter (friar-process) output)
+        (friar-set-pm (point-max))))))
 
 (define-derived-mode friar-mode comint-mode "Friar"
   "Major mode for interacting with the Awesome window manager via Fennel.
@@ -154,10 +173,10 @@ Uses `comint-mode` as an interface.
   (fennel-font-lock-setup)
 
   ;; A dummy process for comint. The friar was a fraud all along!
-  (unless (comint-check-proc (current-buffer))
+  (unless (comint-check-proc (awesome-process-buffer))
     ;; use hexl as the dummy process, because it'll be there if emacs is.
-    (start-process "friar" (current-buffer) "hexl")
-    (set-process-query-on-exit-flag (friar-process) nil)
+    (start-process "friar" (awesome-process-buffer) "hexl")
+    (set-process-query-on-exit-flag (friar-process) t)
     (goto-char (point-max))
 
     (set (make-local-variable 'comint-inhibit-carriage-motion) t)
@@ -167,26 +186,27 @@ Uses `comint-mode` as an interface.
     (friar-set-pm (point-max))
     (unless comint-use-prompt-regexp
       (let ((inhibit-read-only t))
-	(add-text-properties
-	 (point-min) (point-max)
-	 '(rear-nonsticky t field output inhibit-line-move-field-capture t))))
+        (add-text-properties
+         (point-min) (point-max)
+         '(rear-nonsticky t field output inhibit-line-move-field-capture t))))
     (comint-output-filter (friar-process) friar-prompt)
     (set-marker comint-last-input-start (friar-pm))
-    (set-process-filter (get-buffer-process (current-buffer)) 'comint-output-filter)))
+    (set-process-filter (get-buffer-process (awesome-process-buffer))
+                        'comint-output-filter)))
 
 ;;;###autoload
-(defun friar (&optional buf-name)
+(defun friar nil
   "Interact with the Awesome window manager via a Fennel REPL.
 Switches to the buffer named BUF-NAME if provided (`*friar*' by default),
 or creates it if it does not exist."
   (interactive)
   (get-buffer-create "*friar-stderr*") ;; create stderr buffer aot
   (let (old-point
-	(buf-name (or buf-name "*friar*")))
+        (buf-name awesome-buffer-name))
     (unless (comint-check-proc buf-name)
       (with-current-buffer (get-buffer-create buf-name)
-	(unless (zerop (buffer-size)) (setq old-point (point)))
-	(friar-mode)))
+        (unless (zerop (buffer-size)) (setq old-point (point)))
+        (friar-mode)))
     (pop-to-buffer-same-window buf-name)
     (when old-point (push-mark old-point))))
 
